@@ -1,24 +1,23 @@
 import asyncio
-import websockets
 import json
 import os
-from websockets.http11 import Response
-from http import HTTPStatus
 import logging
+from aiohttp import web
+import websockets
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 WS_HOST = "0.0.0.0"
-WS_PORT = int(os.environ.get("PORT", "8000"))  # Use Render.com's PORT or safe default
+WS_PORT = int(os.environ.get("PORT", 8000))  # Use Render.com's PORT
 
 connected_clients = set()
 image_senders = set()
 
 async def handle_connection(ws, path):
     try:
-        logger.info(f"New connection attempt from {ws.remote_address} on path {path}")
+        logger.info(f"New connection from {ws.remote_address} on path {path}")
         first = await ws.recv()
         logger.info(f"Received handshake: {first}")
         obj = json.loads(first)
@@ -51,7 +50,6 @@ async def handle_image_sender(ws):
                 continue
             except json.JSONDecodeError:
                 pass
-
             logger.info(f"Broadcast binary: {len(msg)} bytes")
             if connected_clients:
                 await asyncio.gather(*(c.send(msg) for c in connected_clients), return_exceptions=True)
@@ -59,49 +57,42 @@ async def handle_image_sender(ws):
         image_senders.remove(ws)
         logger.info(f"Sender left: {ws.remote_address}")
 
-async def custom_process_request(path, headers):
-    """Handle non-WebSocket requests, such as HEAD and GET requests from Render.com."""
-    method = headers.get("method", "UNKNOWN")
-    logger.info(f"Received {method} request on path {path} with headers: {dict(headers)}")
-    
-    # Handle all non-WebSocket requests
-    if headers.get("upgrade", "").lower() != "websocket":
-        if method in ["HEAD", "GET"]:
-            logger.info(f"Responding to {method} request with HTTP 200")
-            return Response(
-                status=HTTPStatus.OK,
-                headers={"Content-Length": "0" if method == "HEAD" else str(len(b"WebSocket server is running"))},
-                body=None if method == "HEAD" else b"WebSocket server is running"
-            )
-        logger.warning(f"Unsupported method {method}, returning HTTP 405")
-        return Response(
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-            headers={"Content-Type": "text/plain"},
-            body=b"Method Not Allowed"
+async def http_handler(request):
+    """Handle HTTP requests (GET, HEAD) for health checks and status."""
+    logger.info(f"Received {request.method} request on {request.path}")
+    if request.method in ["GET", "HEAD"]:
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return web.WebSocketResponse()  # Hand off to WebSocket
+        return web.Response(
+            text="WebSocket server is running" if request.method == "GET" else "",
+            status=200,
+            headers={"Content-Length": "0" if request.method == "HEAD" else "25"}
         )
-    
-    logger.info("Processing WebSocket handshake")
-    return None  # Proceed with WebSocket handshake
+    return web.Response(text="Method Not Allowed", status=405)
+
+async def websocket_handler(request):
+    """Handle WebSocket connections."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    await handle_connection(ws, request.path)
+    return ws
 
 async def main():
-    logger.info(f"Starting relay server on ws://{WS_HOST}:{WS_PORT}")
-    try:
-        server = await websockets.serve(
-            handle_connection,
-            WS_HOST,
-            WS_PORT,
-            process_request=custom_process_request,
-            ping_interval=None,  # Disable pings to simplify
-            ping_timeout=None
-        )
-        logger.info("Server started successfully")
-        await asyncio.Future()  # Run forever
-    except Exception as e:
-        logger.error(f"Server startup failed: {e}")
-        raise
+    logger.info(f"Starting server on {WS_HOST}:{WS_PORT}")
+    app = web.Application()
+    app.router.add_route("GET", "/{path:.*}", websocket_handler)
+    app.router.add_route("HEAD", "/{path:.*}", http_handler)
+    app.router.add_route("GET", "/{path:.*}", http_handler)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, WS_HOST, WS_PORT)
+    await site.start()
+    logger.info("Server started successfully")
+    await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
-    logger.info("Initializing WebSocket server")
+    logger.info("Initializing server")
     try:
         asyncio.run(main())
     except Exception as e:
