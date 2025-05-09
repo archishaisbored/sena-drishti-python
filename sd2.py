@@ -11,6 +11,7 @@ import geocoder
 import speech_recognition as sr
 import asyncio
 import websockets
+import os  # for environment variable access
 
 # --- CONFIGURE GEMINI ---
 genai.configure(api_key="AIzaSyBDzaYAAgBdxpLUsct6NaliSiCuejYUVpY")
