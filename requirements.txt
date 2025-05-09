@@ -1,0 +1,7 @@
+opencv-python
+Pillow
+google-generativeai
+pyttsx3
+geocoder
+SpeechRecognition
+websockets
