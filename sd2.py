@@ -15,9 +15,11 @@ connected_clients = set()
 image_senders = set()
 
 async def handle_connection(ws, path, client_ip):
+    logger.info(f"New connection on path {path} from {client_ip}")
+    
+    # Try to receive a handshake message (timeout after 2 seconds)
     try:
-        logger.info(f"New connection on path {path} from {client_ip}")
-        first = await ws.receive()
+        first = await asyncio.wait_for(ws.receive(), timeout=2.0)
         if first.type != WSMsgType.TEXT:
             raise ValueError("Expected text handshake")
         logger.info(f"Received handshake: {first.data}")
@@ -26,21 +28,23 @@ async def handle_connection(ws, path, client_ip):
             image_senders.add(ws)
             logger.info(f"Sender joined: {client_ip}")
             await handle_image_sender(ws, client_ip)
-        else:
-            raise ValueError("Not a sender handshake")
-    except json.JSONDecodeError:
-        connected_clients.add(ws)
-        logger.info(f"Client joined: {client_ip}")
-        try:
-            async for msg in ws:
-                pass  # Keep connection open for clients
-        finally:
-            connected_clients.remove(ws)
-            logger.info(f"Client left: {client_ip}")
+            return
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        # No valid handshake received; treat as a client
+        logger.info(f"No sender handshake from {client_ip} on {path}, treating as client: {e}")
+    
+    # Add to connected clients
+    connected_clients.add(ws)
+    logger.info(f"Client joined: {client_ip} on {path}")
+    try:
+        async for msg in ws:
+            logger.info(f"Received message from client {client_ip} on {path}: {msg.data}")
+            # Optionally handle messages from clients (e.g., pings)
     except Exception as e:
-        logger.error(f"Connection error for {client_ip}: {e}")
-        if not ws.closed:
-            await ws.close(code=1011, message=str(e))
+        logger.error(f"Error with client {client_ip} on {path}: {e}")
+    finally:
+        connected_clients.remove(ws)
+        logger.info(f"Client left: {client_ip} on {path}")
 
 async def handle_image_sender(ws, client_ip):
     try:
@@ -50,13 +54,16 @@ async def handle_image_sender(ws, client_ip):
                     data = json.loads(msg.data)
                     logger.info(f"Broadcast JSON from {client_ip}: {json.dumps(data)}")
                     if connected_clients:
+                        logger.info(f"Broadcasting to {len(connected_clients)} clients")
                         await asyncio.gather(*(c.send_json(data) for c in connected_clients), return_exceptions=True)
                     continue
                 except json.JSONDecodeError:
+                    logger.error(f"Invalid JSON from sender {client_ip}: {msg.data}")
                     pass
             elif msg.type == WSMsgType.BINARY:
                 logger.info(f"Broadcast binary from {client_ip}: {len(msg.data)} bytes")
                 if connected_clients:
+                    logger.info(f"Broadcasting to {len(connected_clients)} clients")
                     await asyncio.gather(*(c.send_bytes(msg.data) for c in connected_clients), return_exceptions=True)
     except Exception as e:
         logger.error(f"Error broadcasting from {client_ip}: {e}")
