@@ -83,7 +83,6 @@ def safe_speak(text: str):
     except Exception as e:
         print(f"⚠️ TTS Error: {e}")
 
-
 def play_beep():
     try:
         import sys, os
@@ -93,7 +92,6 @@ def play_beep():
             print('\a')
     except:
         pass
-
 
 def get_location():
     try:
@@ -105,7 +103,6 @@ def get_location():
     return camera_location
 
 camera_location = get_location()
-
 
 def capture_image(filename='auto_capture.jpg', delay=5) -> str | None:
     global first_capture
@@ -128,14 +125,12 @@ def capture_image(filename='auto_capture.jpg', delay=5) -> str | None:
         print("❌ Failed to capture image.")
         return None
 
-
 def encode_image_to_base64(image_path: str) -> tuple[str, str]:
     with Image.open(image_path) as img:
         buf = io.BytesIO()
         img.save(buf, format="JPEG")
         data = buf.getvalue()
     return base64.b64encode(data).decode(), "image/jpeg"
-
 
 def listen_command(timeout=5) -> str | None:
     global beep_played
@@ -161,7 +156,6 @@ def listen_command(timeout=5) -> str | None:
             print(f"⚠️ Speech recog error: {e}")
             return None
 
-
 def parse_detection(response_text: str):
     try:
         clean = response_text.replace('```json', '').replace('```', '').replace('*', '').strip()
@@ -178,7 +172,6 @@ def parse_detection(response_text: str):
         print(f"⚠️ JSON parse error: {e}")
         return [], 0, 0, {}
 
-
 def analyze_image(image_part: dict) -> str:
     prompt = """Analyze this security image with military-grade precision and return strict JSON without extra text:
 {
@@ -191,7 +184,6 @@ def analyze_image(image_part: dict) -> str:
     except Exception as e:
         print(f"⚠️ Image analysis failed: {e}")
         return '{"weapons_detected":[],"crowd_analysis":{}}'
-
 
 def analyze_weapon_details(weapon: dict, image_part: dict) -> dict:
     prompt = f"""Provide JSON with exact model, range, caliber, threat_level, countermeasures, engagement_distance for this {weapon.get('type','weapon')}.
@@ -208,7 +200,6 @@ def analyze_weapon_details(weapon: dict, image_part: dict) -> dict:
             "engagement_distance":"Unknown"
         }
 
-
 def generate_tactical_commands(weapons: list, crowd_data: dict) -> dict:
     primary = weapons[0] if weapons else {}
     cmds = [
@@ -219,7 +210,6 @@ def generate_tactical_commands(weapons: list, crowd_data: dict) -> dict:
         "Medics prepare trauma kits"
     ]
     return {"commands": cmds, "threat_level": primary.get("threat_level","Unknown")}
-
 
 def create_verbal_report(weapons: list, crowd_data: dict, commands: dict) -> str:
     p = weapons[0] if weapons else {}
@@ -241,13 +231,26 @@ async def websocket_handler(ws, path):
     finally:
         connected_clients.remove(ws)
 
-async def broadcast_data(data: dict):
+async def broadcast_data(data: dict, image_path: str = None):
     print("🔗 Broadcast:", json.dumps(data, indent=2))
     if connected_clients:
+        # Send JSON data first
         await asyncio.gather(
             *(c.send(json.dumps(data)) for c in connected_clients),
             return_exceptions=True
         )
+        # If an image path is provided, send the image as binary
+        if image_path and os.path.exists(image_path):
+            try:
+                with open(image_path, 'rb') as f:
+                    image_data = f.read()
+                await asyncio.gather(
+                    *(c.send(image_data) for c in connected_clients),
+                    return_exceptions=True
+                )
+                print("📷 Image sent over WebSocket")
+            except Exception as e:
+                print(f"⚠️ Error sending image: {e}")
 
 # --- Conversation Handler (now async!) ---
 
@@ -352,7 +355,7 @@ def perform_detection() -> tuple[bool, dict|None]:
     }
     print("📡 Payload:", json.dumps(payload, indent=2))
     weapon_detection_queue.append(payload)
-    asyncio.create_task(broadcast_data(payload))
+    asyncio.create_task(broadcast_data(payload, image_path=img))
 
     return True, payload
 
