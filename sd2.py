@@ -18,7 +18,7 @@ image_senders = set()
 
 async def handle_connection(ws, path):
     try:
-        logger.info(f"New connection attempt from {ws.remote_address}")
+        logger.info(f"New connection attempt from {ws.remote_address} on path {path}")
         first = await ws.recv()
         logger.info(f"Received handshake: {first}")
         obj = json.loads(first)
@@ -27,7 +27,7 @@ async def handle_connection(ws, path):
             logger.info(f"Sender joined: {ws.remote_address}")
             await handle_image_sender(ws)
         else:
-            raise ValueError("not a sender handshake")
+            raise ValueError("Not a sender handshake")
     except json.JSONDecodeError:
         connected_clients.add(ws)
         logger.info(f"Client joined: {ws.remote_address}")
@@ -60,22 +60,27 @@ async def handle_image_sender(ws):
         logger.info(f"Sender left: {ws.remote_address}")
 
 async def custom_process_request(path, headers):
-    """Handle non-WebSocket requests, such as HEAD requests from Render.com."""
+    """Handle non-WebSocket requests, such as HEAD and GET requests from Render.com."""
     method = headers.get("method", "UNKNOWN")
-    logger.info(f"Received {method} request on path {path}")
-    if headers.get("Upgrade", "").lower() != "websocket":
-        if method == "HEAD":
-            logger.info("Responding to HEAD request")
+    logger.info(f"Received {method} request on path {path} with headers: {dict(headers)}")
+    
+    # Handle all non-WebSocket requests
+    if headers.get("upgrade", "").lower() != "websocket":
+        if method in ["HEAD", "GET"]:
+            logger.info(f"Responding to {method} request with HTTP 200")
             return Response(
                 status=HTTPStatus.OK,
-                headers={"Content-Length": "0"}
+                headers={"Content-Length": "0" if method == "HEAD" else str(len(b"WebSocket server is running"))},
+                body=None if method == "HEAD" else b"WebSocket server is running"
             )
-        logger.info("Responding to non-WebSocket request")
+        logger.warning(f"Unsupported method {method}, returning HTTP 405")
         return Response(
-            status=HTTPStatus.OK,
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
             headers={"Content-Type": "text/plain"},
-            body=b"WebSocket server is running"
+            body=b"Method Not Allowed"
         )
+    
+    logger.info("Processing WebSocket handshake")
     return None  # Proceed with WebSocket handshake
 
 async def main():
@@ -85,7 +90,9 @@ async def main():
             handle_connection,
             WS_HOST,
             WS_PORT,
-            process_request=custom_process_request
+            process_request=custom_process_request,
+            ping_interval=None,  # Disable pings to simplify
+            ping_timeout=None
         )
         logger.info("Server started successfully")
         await asyncio.Future()  # Run forever
@@ -94,7 +101,9 @@ async def main():
         raise
 
 if __name__ == "__main__":
+    logger.info("Initializing WebSocket server")
     try:
         asyncio.run(main())
     except Exception as e:
         logger.error(f"Main loop error: {e}")
+        raise
