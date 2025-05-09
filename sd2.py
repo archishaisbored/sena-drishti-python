@@ -11,17 +11,19 @@ import geocoder
 import speech_recognition as sr
 import asyncio
 import websockets
-import os  # Added for environment variable and Render detection
 
 # --- CONFIGURE GEMINI ---
-# Modified: Use environment variable for API key
-genai.configure(api_key=os.getenv("GEMINI_API_KEY", "AIzaSyBDzaYAAgBdxpLUsct6NaliSiCuejYUVpY"))
+genai.configure(api_key="AIzaSyBDzaYAAgBdxpLUsct6NaliSiCuejYUVpY")
 model = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
 # --- TTS INIT ---
-engine = pyttsx3.init()
-engine.setProperty('rate', 160)
-engine.setProperty('volume', 0.9)
+try:
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 160)
+    engine.setProperty('volume', 0.9)
+except Exception as e:
+    print(f"⚠️ TTS engine unavailable: {e}. Falling back to console-only speak.")
+    engine = None
 
 # --- Global Variables ---
 first_capture           = True
@@ -62,7 +64,7 @@ WEAPON_KNOWLEDGE = {
 # WebSocket server config
 connected_clients = set()
 WS_HOST = "0.0.0.0"
-WS_PORT = 8765
+WS_PORT = int(os.environ.get("PORT", "8765"))  # Render provides PORT env var
 
 # --- Helper Functions ---
 
@@ -106,43 +108,17 @@ camera_location = get_location()
 
 def capture_image(filename='auto_capture.jpg', delay=5) -> str | None:
     global first_capture
-    # --- MODIFIED: USE LOGITECH WEBCAM WITH OPTIMIZED SETTINGS ---
-    # Explicitly set camera index to 1 for Logitech webcam
-    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)  # Use DirectShow backend for Windows (faster for Logitech webcams)
+    cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("❌ Cannot open Logitech webcam on index 1. Falling back to default camera.")
-        cap = cv2.VideoCapture(0)  # Fallback to default camera if Logitech fails
-        if not cap.isOpened():
-            # Added: Check if running on Render (no webcam available)
-            if os.getenv("RENDER"):
-                # Use a placeholder image on Render
-                placeholder_image = "placeholder.jpg"
-                if not os.path.exists(placeholder_image):
-                    print("❌ Placeholder image not found.")
-                    return None
-                print(f"✅ Using placeholder image: {placeholder_image}")
-                return placeholder_image
-            raise IOError("Cannot open any webcam")
+        raise IOError("Cannot open webcam")
 
-    # Set optimized properties for Logitech 720p webcam
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # Lower resolution to 640x480 for faster capture
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 30)            # Set frame rate to 30 FPS
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # Use MJPEG codec for better performance
-    # Clear buffer to reduce latency
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-    current_delay = delay if first_capture else 1
-    print(f"⏳ Capturing image in {current_delay} seconds...")
-    time.sleep(current_delay)
-    
+    wait = delay if first_capture else 1
+    print(f"⏳ Capturing image in {wait} seconds…")
+    time.sleep(wait)
     first_capture = False
-    # --- NEW: READ MULTIPLE FRAMES TO CLEAR BUFFER ---
-    for _ in range(5):  # Read a few frames to ensure the latest frame
-        cap.grab()
+
     ret, frame = cap.read()
     cap.release()
-    
     if ret:
         cv2.imwrite(filename, frame)
         print(f"✅ Image captured: {filename}")
@@ -162,10 +138,6 @@ def encode_image_to_base64(image_path: str) -> tuple[str, str]:
 
 def listen_command(timeout=5) -> str | None:
     global beep_played
-    # Added: Mock speech input on Render
-    if os.getenv("RENDER"):
-        print("🎤 Mocking speech input on Render...")
-        return "switch to surveillance"  # Mock input for testing
     r = sr.Recognizer()
     r.pause_threshold = 1.0
     r.phrase_threshold = 0.5
@@ -375,10 +347,7 @@ def perform_detection() -> tuple[bool, dict|None]:
         "weapons": enriched,
         "location": camera_location,
         "timestamp": timestamp,
-        "threat_level": cmds["threat_level"],
-        "crowd_data": crowd,  # Added: Include crowd_data for StrategyOverlay.tsx
-        "raw_detection": raw,  # Added: Include raw_detection for potential debugging
-        "image": b64  # Added: Include base64-encoded image for frontend display
+        "threat_level": cmds["threat_level"]
     }
     print("📡 Payload:", json.dumps(payload, indent=2))
     weapon_detection_queue.append(payload)
